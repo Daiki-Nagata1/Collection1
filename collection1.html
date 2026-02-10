@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entertainment Collection</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons (Lucide-React UMD depends on React being loaded first) -->
+    <script src="https://unpkg.com/lucide-react@0.344.0/dist/umd/lucide-react.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+        
+        // LucideReact is the global name for the UMD build
+        const { 
+            Plus, Search, Layout, Flame, Heart, Lightbulb, ExternalLink, 
+            X, Send, LayoutGrid, List: ListIcon, ChevronRight, 
+            ArrowUpDown, Layers, Link2, Smile 
+        } = LucideReact;
+
+        const App = () => {
+            const [viewMode, setViewMode] = useState('card');
+            const [activeTab, setActiveTab] = useState('すべて');
+            const [sortBy, setSortBy] = useState('newest');
+            const [showModal, setShowModal] = useState(false);
+            const [searchQuery, setSearchQuery] = useState('');
+            const [postType, setPostType] = useState('single');
+
+            // 初期データ
+            const initialItems = [
+                {
+                    id: 1,
+                    title: "Elden Ring: Shadow of the Erdtree",
+                    category: "ゲーム",
+                    user: "佐藤（ゲーム事業部）",
+                    comment: "DLCとは思えないボリューム。環境構築の美学が詰まってます。レベルデザインの参考に！",
+                    reactions: { fire: 12, heart: 8, light: 5 },
+                    image: "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800&auto=format&fit=crop",
+                    date: "2024-06-21",
+                    isCollection: false
+                },
+                {
+                    id: 5,
+                    title: "FFピクセルリマスター 1〜6セット",
+                    category: "ゲーム",
+                    user: "加藤（開発）",
+                    comment: "ドット絵の極致。UIの現代化も完璧。シリーズの変遷を一度に学べる神パッケージです。",
+                    reactions: { fire: 56, heart: 20, light: 45 },
+                    image: "https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=800&auto=format&fit=crop",
+                    date: "2024-07-05",
+                    isCollection: true,
+                    subItems: [
+                        { id: 's1', title: "FF I", reactions: { fire: 5 } },
+                        { id: 's2', title: "FF IV", reactions: { fire: 18 } },
+                        { id: 's3', title: "FF VI", reactions: { fire: 32 } }
+                    ]
+                },
+                {
+                    id: 2,
+                    title: "ルックバック",
+                    category: "漫画",
+                    user: "田中（出版編集）",
+                    comment: "演出と間の使い方が天才的. 全クリエイターが一度は通るべき道. 映画版も最高でした. 藤本タツキ先生の熱量が紙面から溢れ出しています。",
+                    reactions: { fire: 45, heart: 32, light: 18 },
+                    image: "https://images.unsplash.com/photo-1578632292335-df3abbb0d586?q=80&w=800&auto=format&fit=crop",
+                    date: "2024-06-28",
+                    isCollection: false
+                },
+                {
+                    id: 6,
+                    title: "映像制作の極意：おすすめ動画3選",
+                    category: "YouTube",
+                    user: "鈴木（映像制作）",
+                    comment: "最近のトレンドはこの3つに集約されてます。特にライティングの解説が秀逸。プロの映像制作における基礎が詰まっています。",
+                    reactions: { fire: 8, heart: 15, light: 62 },
+                    image: "https://images.unsplash.com/photo-1492724441997-5dc865305da7?q=80&w=800&auto=format&fit=crop",
+                    date: "2024-07-10",
+                    isCollection: true,
+                    subItems: [
+                        { id: 'v1', title: "Color Grading 101", reactions: { light: 12 } },
+                        { id: 'v2', title: "Lighting for Sci-Fi", reactions: { light: 24 } },
+                        { id: 'v3', title: "Composition Masterclass", reactions: { light: 15 } }
+                    ]
+                }
+            ];
+
+            const [items, setItems] = useState(initialItems);
+
+            const categories = ["すべて", "ゲーム", "漫画", "YouTube", "アニメ", "小説", "その他"];
+
+            const categoryCounts = useMemo(() => {
+                const counts = { "すべて": items.length };
+                items.forEach(item => {
+                    counts[item.category] = (counts[item.category] || 0) + 1;
+                });
+                return counts;
+            }, [items]);
+
+            const handleReaction = (itemId, type) => {
+                setItems(prev => prev.map(item => {
+                    if (item.id === itemId) {
+                        return { ...item, reactions: { ...item.reactions, [type]: (item.reactions[type] || 0) + 1 } };
+                    }
+                    return item;
+                }));
+            };
+
+            const handleSubItemReaction = (itemId, subId, type) => {
+                setItems(prev => prev.map(item => {
+                    if (item.id === itemId && item.isCollection) {
+                        return {
+                            ...item,
+                            subItems: item.subItems.map(sub => {
+                                if (sub.id === subId) {
+                                    const currentReactions = sub.reactions || {};
+                                    return { ...sub, reactions: { ...currentReactions, [type]: (currentReactions[type] || 0) + 1 } };
+                                }
+                                return sub;
+                            })
+                        };
+                    }
+                    return item;
+                }));
+            };
+
+            const filteredAndSortedItems = useMemo(() => {
+                let result = items.filter(item => 
+                    (activeTab === "すべて" || item.category === activeTab) &&
+                    (item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                     item.comment.toLowerCase().includes(searchQuery.toLowerCase()))
+                );
+
+                if (sortBy === 'newest') {
+                    result.sort((a, b) => new Date(b.date) - new Date(a.date));
+                } else if (sortBy === 'popular') {
+                    result.sort((a, b) => {
+                        const totalA = (a.reactions.fire || 0) + (a.reactions.heart || 0) + (a.reactions.light || 0);
+                        const totalB = (b.reactions.fire || 0) + (b.reactions.heart || 0) + (b.reactions.light || 0);
+                        return totalB - totalA;
+                    });
+                }
+                return result;
+            }, [items, activeTab, searchQuery, sortBy]);
+
+            return (
+                <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
+                    {/* Header */}
+                    <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-slate-200 px-4 sm:px-6 py-4">
+                        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-2 shrink-0">
+                                <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-lg shadow-indigo-100">
+                                    <Layout size={24} />
+                                </div>
+                                <h1 className="text-xl font-bold tracking-tight hidden sm:block italic text-indigo-900">Entertainment Collection</h1>
+                            </div>
+
+                            <div className="flex-1 max-w-md">
+                                <div className="relative">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                                    <input 
+                                        type="text" 
+                                        placeholder="作品名やコメントで検索..." 
+                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-100 rounded-full border-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm outline-none"
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                    />
+                                </div>
+                            </div>
+
+                            <button 
+                                onClick={() => setShowModal(true)}
+                                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 sm:px-6 py-2.5 rounded-full font-bold transition-all shadow-lg shadow-indigo-200 shrink-0 transform hover:scale-105 active:scale-95"
+                            >
+                                <Plus size={20} />
+                                <span className="hidden sm:inline">共有する</span>
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Sub-nav */}
+                    <div className="bg-white border-b border-slate-100 px-4 sm:px-6 py-3 sticky top-[73px] z-20 shadow-sm">
+                        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pr-4">
+                                {categories.map(cat => (
+                                    <button
+                                        key={cat}
+                                        onClick={() => setActiveTab(cat)}
+                                        className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
+                                            activeTab === cat ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'
+                                        }`}
+                                    >
+                                        <span>{cat}</span>
+                                        <span className={`flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] ${
+                                            activeTab === cat ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-500'
+                                        }`}>
+                                            {categoryCounts[cat] || 0}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="flex items-center gap-4 self-end md:self-auto">
+                                <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
+                                    <ArrowUpDown size={14} className="text-slate-500" />
+                                    <select 
+                                        value={sortBy} 
+                                        onChange={(e) => setSortBy(e.target.value)}
+                                        className="bg-transparent text-xs font-bold text-slate-600 outline-none cursor-pointer"
+                                    >
+                                        <option value="newest">新着順</option>
+                                        <option value="popular">盛り上がり順</option>
+                                    </select>
+                                </div>
+
+                                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                                    <button onClick={() => setViewMode('card')} className={`p-2 rounded-lg transition-all ${viewMode === 'card' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}><LayoutGrid size={18} /></button>
+                                    <button onClick={() => setViewMode('list')} className={`p-2 rounded-lg transition-all ${viewMode === 'list' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}><ListIcon size={18} /></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Main Feed */}
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+                        {viewMode === 'card' ? (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                                {filteredAndSortedItems.map(item => (
+                                    <div key={item.id} className="group relative h-full">
+                                        {item.isCollection && (
+                                            <>
+                                                <div className="absolute inset-0 translate-x-2 translate-y-2 bg-indigo-100 rounded-3xl border border-indigo-200 -z-10"></div>
+                                                <div className="absolute inset-0 translate-x-1 translate-y-1 bg-indigo-50 rounded-3xl border border-indigo-100 -z-10"></div>
+                                            </>
+                                        )}
+
+                                        <div className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-slate-200 flex flex-col h-full">
+                                            <div className="relative h-44 bg-slate-200 overflow-hidden shrink-0">
+                                                <img src={item.image} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                                                <div className="absolute top-4 left-4 flex gap-2">
+                                                    <div className="bg-white/90 backdrop-blur-sm px-3 py-1 rounded-full text-[10px] font-bold text-indigo-700 uppercase">
+                                                        {item.category}
+                                                    </div>
+                                                    {item.isCollection && (
+                                                        <div className="bg-indigo-600 px-3 py-1 rounded-full text-[10px] font-bold text-white flex items-center gap-1 shadow-md">
+                                                            <Layers size={10} />
+                                                            <span>COLLECTION</span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="p-6 flex flex-col flex-1">
+                                                <div className="flex justify-between items-start mb-3">
+                                                    <h3 className="text-lg font-bold leading-tight group-hover:text-indigo-600 transition-colors line-clamp-2 min-h-[3.5rem]">{item.title}</h3>
+                                                    <ExternalLink size={16} className="text-slate-300" />
+                                                </div>
+                                                
+                                                <div className="mb-4">
+                                                    <p className="text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-2xl italic leading-relaxed border border-slate-100 min-h-[5.5rem]">
+                                                        "{item.comment}"
+                                                    </p>
+                                                </div>
+
+                                                {item.isCollection && (
+                                                    <div className="mb-4 space-y-1.5 flex-1">
+                                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">個別リアクション</p>
+                                                        <div className="space-y-1.5">
+                                                            {item.subItems.map((sub) => (
+                                                                <div key={sub.id} className="flex items-center justify-between gap-2 bg-slate-50/80 rounded-xl px-3 py-2 border border-slate-100 hover:border-indigo-100 transition-colors">
+                                                                    <span className="text-xs text-slate-700 truncate font-medium">{sub.title}</span>
+                                                                    <button 
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            handleSubItemReaction(item.id, sub.id, item.category === 'YouTube' ? 'light' : 'fire');
+                                                                        }}
+                                                                        className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white border border-slate-200 hover:border-indigo-300 text-slate-400 hover:text-indigo-600 transition-all active:scale-90"
+                                                                    >
+                                                                        {item.category === 'YouTube' ? <Lightbulb size={12} /> : <Flame size={12} />}
+                                                                        <span className="text-[10px] font-bold">{(sub.reactions?.fire || sub.reactions?.light || 0)}</span>
+                                                                    </button>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                
+                                                <div className="mt-auto flex items-center justify-between pt-4 border-t border-slate-100">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="w-8 h-8 rounded-full bg-slate-100 border-2 border-white shadow-sm flex items-center justify-center text-slate-400">
+                                                            <Smile size={14} />
+                                                        </div>
+                                                        <span className="text-[10px] font-bold text-slate-500">{item.user.split('（')[0]}</span>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <button onClick={() => handleReaction(item.id, 'fire')} className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-50 hover:bg-orange-50 text-slate-400 hover:text-orange-500 transition-all border border-transparent hover:border-orange-100">
+                                                            <Flame size={14} /><span className="text-xs font-bold">{item.reactions.fire}</span>
+                                                        </button>
+                                                        <button onClick={() => handleReaction(item.id, 'heart')} className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-500 transition-all border border-transparent hover:border-red-100">
+                                                            <Heart size={14} /><span className="text-xs font-bold">{item.reactions.heart}</span>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="flex flex-col gap-3">
+                                {filteredAndSortedItems.map(item => (
+                                    <div key={item.id} className={`group bg-white rounded-2xl p-4 flex flex-col gap-4 border transition-all ${item.isCollection ? 'border-indigo-200' : 'border-slate-200'}`}>
+                                        <div className="flex items-center gap-4">
+                                            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden shrink-0 shadow-inner relative">
+                                                <img src={item.image} alt={item.title} className="w-full h-full object-cover" />
+                                                {item.isCollection && (
+                                                    <div className="absolute bottom-0 right-0 bg-indigo-600 text-white p-1 rounded-tl-lg">
+                                                        <Layers size={10} />
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase ${item.isCollection ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-600'}`}>
+                                                        {item.isCollection ? 'COLLECTION' : item.category}
+                                                    </span>
+                                                    <span className="text-[10px] font-medium text-slate-400">by {item.user} • {item.date}</span>
+                                                </div>
+                                                <h3 className="text-base font-bold text-slate-800 truncate mb-1">{item.title}</h3>
+                                                <p className="text-slate-500 text-xs sm:text-sm line-clamp-1 italic">{item.comment}</p>
+                                            </div>
+
+                                            <div className="hidden sm:flex items-center gap-2 px-4 border-l border-slate-100">
+                                                <button onClick={() => handleReaction(item.id, 'fire')} className="flex flex-col items-center p-2 rounded-xl hover:bg-orange-50 text-slate-300 hover:text-orange-500 transition-all">
+                                                    <Flame size={18} /><span className="text-[10px] font-bold">{item.reactions.fire}</span>
+                                                </button>
+                                                <button onClick={() => handleReaction(item.id, 'heart')} className="flex flex-col items-center p-2 rounded-xl hover:bg-red-50 text-slate-300 hover:text-red-500 transition-all">
+                                                    <Heart size={18} /><span className="text-[10px] font-bold">{item.reactions.heart}</span>
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {item.isCollection && (
+                                            <div className="pl-0 sm:pl-[84px] pb-2">
+                                                <div className="flex flex-wrap gap-2">
+                                                    {item.subItems.map(sub => (
+                                                        <button 
+                                                            key={sub.id} 
+                                                            onClick={() => handleSubItemReaction(item.id, sub.id, item.category === 'YouTube' ? 'light' : 'fire')}
+                                                            className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 hover:border-indigo-300 transition-all group"
+                                                        >
+                                                            <span className="text-xs text-slate-600">{sub.title}</span>
+                                                            <div className="flex items-center gap-1 text-[10px] font-bold text-indigo-400 group-hover:text-indigo-600">
+                                                                {item.category === 'YouTube' ? <Lightbulb size={10} /> : <Flame size={10} />}
+                                                                {(sub.reactions?.fire || sub.reactions?.light || 0)}
+                                                            </div>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        {filteredAndSortedItems.length === 0 && (
+                            <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-slate-200">
+                                <Search size={48} className="mx-auto text-slate-200 mb-4" />
+                                <p className="text-slate-400 font-medium">該当する「推し」が見つかりませんでした。</p>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Post Modal */}
+                    {showModal && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
+                            <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden my-auto animate-in zoom-in-95 duration-200">
+                                <div className="flex justify-between items-center px-6 py-5 border-b border-slate-100">
+                                    <h2 className="text-xl font-bold">「推し」を共有</h2>
+                                    <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 bg-slate-100 p-2 rounded-full transition-colors"><X size={20} /></button>
+                                </div>
+                                
+                                <div className="p-6 space-y-6">
+                                    <div className="flex p-1 bg-slate-100 rounded-xl">
+                                        <button 
+                                            onClick={() => setPostType('single')}
+                                            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${postType === 'single' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}
+                                        >単体作品</button>
+                                        <button 
+                                            onClick={() => setPostType('collection')}
+                                            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${postType === 'collection' ? 'bg-indigo-600 shadow-sm text-white' : 'text-slate-500'}`}
+                                        >まとめ・シリーズ</button>
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">作品名 / コレクション名</label>
+                                            <input type="text" placeholder={postType === 'single' ? "作品名を入力" : "「FFシリーズまとめ」など"} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+                                        </div>
+
+                                        {postType === 'collection' && (
+                                            <div className="space-y-2">
+                                                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">含まれる作品</label>
+                                                <div className="relative">
+                                                    <input type="text" placeholder="作品タイトルを入力" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm mb-2 pr-10" />
+                                                    <Link2 size={16} className="absolute right-3 top-3.5 text-slate-300" />
+                                                </div>
+                                                <button className="text-[10px] font-bold text-indigo-600 flex items-center gap-1 hover:underline">
+                                                    <Plus size={12} />
+                                                    作品を追加
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">プロの推しポイント</label>
+                                            <textarea rows="3" placeholder="業界人としてココを見てほしい！" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm leading-relaxed outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                                        </div>
+                                    </div>
+
+                                    <button 
+                                        onClick={() => {
+                                            setShowModal(false);
+                                        }}
+                                        className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200"
+                                    >
+                                        <Send size={18} />
+                                        <span>共有する</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
