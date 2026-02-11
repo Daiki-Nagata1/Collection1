@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entertainment Collection</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- Babel for JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Core Library -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, addDoc, updateDoc, onSnapshot, query, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.FirebaseSDK = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, collection, doc, addDoc, updateDoc, onSnapshot, query, setDoc };
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+
+        /**
+         * Safe Icon Component
+         */
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (window.lucide && iconRef.current) {
+                    window.lucide.createIcons({
+                        attrs: { class: className, width: size, height: size },
+                        nameAttr: 'data-lucide'
+                    });
+                }
+            }, [name, size, className]);
+            return <i data-lucide={name} ref={iconRef} className={className} style={{ width: size, height: size, display: 'inline-block' }}></i>;
+        };
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [items, setItems] = useState([]);
+            const [isLoading, setIsLoading] = useState(true);
+            const [viewMode, setViewMode] = useState('card');
+            const [activeTab, setActiveTab] = useState('すべて');
+            const [sortBy, setSortBy] = useState('newest');
+            const [showModal, setShowModal] = useState(false);
+            const [searchQuery, setSearchQuery] = useState('');
+            const [postType, setPostType] = useState('single');
+
+            // Form States
+            const [formTitle, setFormTitle] = useState('');
+            const [formCategory, setFormCategory] = useState('映画');
+            const [formComment, setFormComment] = useState('');
+            const [formUrl, setFormUrl] = useState('');
+            const [subItemsInput, setSubItemsInput] = useState(['']);
+
+            const categories = ["すべて", "映画", "漫画", "アニメ", "ドラマ", "ゲーム", "YouTube", "小説", "その他"];
+
+            // Firebase Config & Init
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'entame-collection-default';
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+
+            useEffect(() => {
+                if (!firebaseConfig) {
+                    console.error("Firebase configuration is missing.");
+                    return;
+                }
+                const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, collection, onSnapshot } = window.FirebaseSDK;
+                
+                const app = initializeApp(firebaseConfig);
+                const auth = getAuth(app);
+                const db = getFirestore(app);
+
+                const initAuth = async () => {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                };
+                initAuth();
+
+                const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+                    setUser(u);
+                    if (u) {
+                        // Load shared data
+                        const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'recommendations');
+                        const unsubscribeData = onSnapshot(colRef, (snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setItems(data);
+                            setIsLoading(false);
+                        }, (error) => {
+                            console.error("Firestore Error:", error);
+                            setIsLoading(false);
+                        });
+                        return () => unsubscribeData();
+                    }
+                });
+
+                return () => unsubscribeAuth();
+            }, []);
+
+            const categoryCounts = useMemo(() => {
+                const counts = { "すべて": items.length };
+                items.forEach(item => {
+                    counts[item.category] = (counts[item.category] || 0) + 1;
+                });
+                return counts;
+            }, [items]);
+
+            const handleReaction = async (itemId, type) => {
+                if (!user) return;
+                const { getFirestore, doc, updateDoc } = window.FirebaseSDK;
+                const db = getFirestore();
+                const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'recommendations', itemId);
+                const currentItem = items.find(i => i.id === itemId);
+                const newReactions = { ...currentItem.reactions };
+                newReactions[type] = (newReactions[type] || 0) + 1;
+                await updateDoc(itemRef, { reactions: newReactions });
+            };
+
+            const handleSubItemReaction = async (itemId, subIdx, type) => {
+                if (!user) return;
+                const { getFirestore, doc, updateDoc } = window.FirebaseSDK;
+                const db = getFirestore();
+                const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'recommendations', itemId);
+                const currentItem = items.find(i => i.id === itemId);
+                const newSubItems = [...currentItem.subItems];
+                const targetSub = { ...newSubItems[subIdx] };
+                targetSub.reactions = { ...targetSub.reactions };
+                targetSub.reactions[type] = (targetSub.reactions[type] || 0) + 1;
+                newSubItems[subIdx] = targetSub;
+                await updateDoc(itemRef, { subItems: newSubItems });
+            };
+
+            const handleSubmit = async () => {
+                if (!user || !formTitle || !formComment) return;
+                const { getFirestore, collection, addDoc } = window.FirebaseSDK;
+                const db = getFirestore();
+                
+                const newItem = {
+                    title: formTitle,
+                    category: formCategory,
+                    comment: formComment,
+                    user: `User-${user.uid.slice(0, 5)}`,
+                    date: new Date().toISOString().split('T')[0],
+                    reactions: { fire: 0, heart: 0, light: 0 },
+                    image: formUrl || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=800&auto=format&fit=crop",
+                    isCollection: postType === 'collection',
+                    subItems: postType === 'collection' ? subItemsInput.filter(s => s).map(s => ({ title: s, reactions: { fire: 0, light: 0 } })) : []
+                };
+
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'recommendations'), newItem);
+                
+                // Reset form
+                setFormTitle('');
+                setFormComment('');
+                setFormUrl('');
+                setSubItemsInput(['']);
+                setShowModal(false);
+            };
+
+            const filteredAndSortedItems = useMemo(() => {
+                let result = items.filter(item => 
+                    (activeTab === "すべて" || item.category === activeTab) &&
+                    (item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                     item.comment.toLowerCase().includes(searchQuery.toLowerCase()))
+                );
+
+                if (sortBy === 'newest') {
+                    result.sort((a, b) => new Date(b.date) - new Date(a.date));
+                } else if (sortBy === 'popular') {
+                    result.sort((a, b) => {
+                        const totalA = (a.reactions.fire || 0) + (a.reactions.heart || 0) + (a.reactions.light || 0);
+                        const totalB = (b.reactions.fire || 0) + (b.reactions.heart || 0) + (b.reactions.light || 0);
+                        return totalB - totalA;
+                    });
+                }
+                return result;
+            }, [items, activeTab, searchQuery, sortBy]);
+
+            return (
+                <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
+                    {/* Header */}
+                    <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-slate-200 px-4 sm:px-6 py-4">
+                        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-2 shrink-0">
+                                <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-lg shadow-indigo-100 flex items-center justify-center">
+                                    <Icon name="layout" size={24} />
+                                </div>
+                                <h1 className="text-xl font-bold tracking-tight hidden sm:block italic text-indigo-900">Entertainment Collection</h1>
+                            </div>
+
+                            <div className="flex-1 max-w-md">
+                                <div className="relative">
+                                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+                                        <Icon name="search" size={18} />
+                                    </div>
+                                    <input 
+                                        type="text" 
+                                        placeholder="検索..." 
+                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-100 rounded-full border-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm outline-none"
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                    />
+                                </div>
+                            </div>
+
+                            <button 
+                                onClick={() => setShowModal(true)}
+                                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 sm:px-6 py-2.5 rounded-full font-bold transition-all shadow-lg shadow-indigo-200 shrink-0 transform hover:scale-105 active:scale-95"
+                            >
+                                <Icon name="plus" size={20} />
+                                <span className="hidden sm:inline">共有する</span>
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Sub-nav */}
+                    <div className="bg-white border-b border-slate-100 px-4 sm:px-6 py-3 sticky top-[73px] z-20 shadow-sm">
+                        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pr-4">
+                                {categories.map(cat => (
+                                    <button
+                                        key={cat}
+                                        onClick={() => setActiveTab(cat)}
+                                        className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap border ${
+                                            activeTab === cat ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'text-slate-500 bg-white border-slate-200 hover:bg-slate-50'
+                                        }`}
+                                    >
+                                        <span>{cat}</span>
+                                        <span className={`flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] ${
+                                            activeTab === cat ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-500'
+                                        }`}>
+                                            {categoryCounts[cat] || 0}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="flex items-center gap-4 self-end md:self-auto">
+                                <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
+                                    <Icon name="arrow-up-down" size={14} className="text-slate-500" />
+                                    <select 
+                                        value={sortBy} 
+                                        onChange={(e) => setSortBy(e.target.value)}
+                                        className="bg-transparent text-xs font-bold text-slate-600 outline-none cursor-pointer"
+                                    >
+                                        <option value="newest">新着順</option>
+                                        <option value="popular">盛り上がり順</option>
+                                    </select>
+                                </div>
+
+                                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                                    <button onClick={() => setViewMode('card')} className={`p-2 rounded-lg transition-all ${viewMode === 'card' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>
+                                        <Icon name="layout-grid" size={18} />
+                                    </button>
+                                    <button onClick={() => setViewMode('list')} className={`p-2 rounded-lg transition-all ${viewMode === 'list' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>
+                                        <Icon name="list" size={18} />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Main Feed */}
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+                        {isLoading ? (
+                            <div className="flex flex-col items-center justify-center py-20">
+                                <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+                                <p className="mt-4 text-slate-400 font-medium">データを読み込み中...</p>
+                            </div>
+                        ) : (
+                            viewMode === 'card' ? (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                                    {filteredAndSortedItems.map(item => (
+                                        <div key={item.id} className="group relative h-full fade-in">
+                                            {item.isCollection && (
+                                                <>
+                                                    <div className="absolute inset-0 translate-x-2 translate-y-2 bg-indigo-100 rounded-3xl border border-indigo-200 -z-10"></div>
+                                                    <div className="absolute inset-0 translate-x-1 translate-y-1 bg-indigo-50 rounded-3xl border border-indigo-100 -z-10"></div>
+                                                </>
+                                            )}
+                                            <div className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-slate-200 flex flex-col h-full">
+                                                <div className="relative h-44 bg-slate-200 overflow-hidden shrink-0">
+                                                    <img src={item.image} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                                                    <div className="absolute top-4 left-4 flex gap-2">
+                                                        <div className="bg-white/90 backdrop-blur-sm px-3 py-1 rounded-full text-[10px] font-bold text-indigo-700 uppercase">
+                                                            {item.category}
+                                                        </div>
+                                                        {item.isCollection && (
+                                                            <div className="bg-indigo-600 px-3 py-1 rounded-full text-[10px] font-bold text-white flex items-center gap-1 shadow-md">
+                                                                <Icon name="layers" size={10} />
+                                                                <span>COLLECTION</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="p-6 flex flex-col flex-1">
+                                                    <h3 className="text-lg font-bold leading-tight group-hover:text-indigo-600 transition-colors line-clamp-2 min-h-[3.5rem]">{item.title}</h3>
+                                                    <div className="mb-4">
+                                                        <p className="text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-2xl italic leading-relaxed border border-slate-100 min-h-[5.5rem]">"{item.comment}"</p>
+                                                    </div>
+                                                    {item.isCollection && (
+                                                        <div className="mb-4 space-y-1.5 flex-1">
+                                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">個別リアクション</p>
+                                                            <div className="space-y-1.5">
+                                                                {(item.subItems || []).map((sub, idx) => (
+                                                                    <div key={idx} className="flex items-center justify-between gap-2 bg-slate-50/80 rounded-xl px-3 py-2 border border-slate-100 hover:border-indigo-100 transition-colors">
+                                                                        <span className="text-xs text-slate-700 truncate font-medium">{sub.title}</span>
+                                                                        <button onClick={() => handleSubItemReaction(item.id, idx, item.category === 'YouTube' ? 'lightbulb' : 'flame')} className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white border border-slate-200 hover:border-indigo-300 text-slate-400 hover:text-indigo-600 transition-all active:scale-90">
+                                                                            <Icon name={item.category === 'YouTube' ? 'lightbulb' : 'flame'} size={12} />
+                                                                            <span className="text-[10px] font-bold">{(sub.reactions?.fire || sub.reactions?.light || 0)}</span>
+                                                                        </button>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    <div className="mt-auto flex items-center justify-between pt-4 border-t border-slate-100">
+                                                        <span className="text-[10px] font-bold text-slate-500 uppercase">{item.user}</span>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={() => handleReaction(item.id, 'fire')} className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-50 hover:bg-orange-50 text-slate-400 hover:text-orange-500 transition-all border border-transparent hover:border-orange-100">
+                                                                <Icon name="flame" size={14} /><span className="text-xs font-bold">{item.reactions?.fire || 0}</span>
+                                                            </button>
+                                                            <button onClick={() => handleReaction(item.id, 'heart')} className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-500 transition-all border border-transparent hover:border-red-100">
+                                                                <Icon name="heart" size={14} /><span className="text-xs font-bold">{item.reactions?.heart || 0}</span>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="flex flex-col gap-3">
+                                    {filteredAndSortedItems.map(item => (
+                                        <div key={item.id} className={`group bg-white rounded-2xl p-4 flex flex-col gap-4 border transition-all fade-in ${item.isCollection ? 'border-indigo-200 shadow-sm' : 'border-slate-200'}`}>
+                                            <div className="flex items-center gap-4">
+                                                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden shrink-0 relative">
+                                                    <img src={item.image} alt={item.title} className="w-full h-full object-cover" />
+                                                    {item.isCollection && <div className="absolute bottom-0 right-0 bg-indigo-600 text-white p-1 rounded-tl-lg flex items-center justify-center"><Icon name="layers" size={10} /></div>}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase ${item.isCollection ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-600'}`}>{item.category}</span>
+                                                        <span className="text-[10px] font-medium text-slate-400">by {item.user} • {item.date}</span>
+                                                    </div>
+                                                    <h3 className="text-base font-bold text-slate-800 truncate mb-1">{item.title}</h3>
+                                                    <p className="text-slate-500 text-xs sm:text-sm line-clamp-1 italic">{item.comment}</p>
+                                                </div>
+                                                <div className="hidden sm:flex items-center gap-2 px-4 border-l border-slate-100">
+                                                    <button onClick={() => handleReaction(item.id, 'fire')} className="flex flex-col items-center p-2 rounded-xl hover:bg-orange-50 text-slate-300 hover:text-orange-500 transition-all"><Icon name="flame" size={18} /><span className="text-[10px] font-bold">{item.reactions?.fire || 0}</span></button>
+                                                    <button onClick={() => handleReaction(item.id, 'heart')} className="flex flex-col items-center p-2 rounded-xl hover:bg-red-50 text-slate-300 hover:text-red-500 transition-all"><Icon name="heart" size={18} /><span className="text-[10px] font-bold">{item.reactions?.heart || 0}</span></button>
+                                                </div>
+                                            </div>
+                                            {item.isCollection && (
+                                                <div className="pl-0 sm:pl-[84px] pb-2 flex flex-wrap gap-2">
+                                                    {(item.subItems || []).map((sub, idx) => (
+                                                        <button key={idx} onClick={() => handleSubItemReaction(item.id, idx, item.category === 'YouTube' ? 'lightbulb' : 'flame')} className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 hover:border-indigo-300 transition-all group">
+                                                            <span className="text-xs text-slate-600">{sub.title}</span>
+                                                            <div className="flex items-center gap-1 text-[10px] font-bold text-indigo-400 group-hover:text-indigo-600">
+                                                                <Icon name={item.category === 'YouTube' ? 'lightbulb' : 'flame'} size={10} />
+                                                                {(sub.reactions?.fire || sub.reactions?.light || 0)}
+                                                            </div>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )
+                        )}
+                    </main>
+
+                    {/* Post Modal */}
+                    {showModal && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
+                            <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden my-auto animate-in zoom-in-95 duration-200">
+                                <div className="flex justify-between items-center px-6 py-5 border-b border-slate-100">
+                                    <h2 className="text-xl font-bold">「推し」を共有</h2>
+                                    <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 bg-slate-100 p-2 rounded-full transition-colors"><Icon name="x" size={20} /></button>
+                                </div>
+                                <div className="p-6 space-y-6">
+                                    <div className="flex p-1 bg-slate-100 rounded-xl">
+                                        <button onClick={() => setPostType('single')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${postType === 'single' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>単体作品</button>
+                                        <button onClick={() => setPostType('collection')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${postType === 'collection' ? 'bg-indigo-600 shadow-sm text-white' : 'text-slate-500'}`}>まとめ・シリーズ</button>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">作品名 / コレクション名</label>
+                                            <input type="text" value={formTitle} onChange={(e) => setFormTitle(e.target.value)} placeholder="名称を入力" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+                                        </div>
+                                        {postType === 'collection' && (
+                                            <div className="space-y-2">
+                                                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">含まれる作品</label>
+                                                {subItemsInput.map((val, idx) => (
+                                                    <input key={idx} type="text" value={val} onChange={(e) => {
+                                                        const newArr = [...subItemsInput];
+                                                        newArr[idx] = e.target.value;
+                                                        setSubItemsInput(newArr);
+                                                    }} placeholder={`作品 ${idx + 1}`} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm mb-2" />
+                                                ))}
+                                                <button onClick={() => setSubItemsInput([...subItemsInput, ''])} className="text-[10px] font-bold text-indigo-600 flex items-center gap-1 hover:underline"><Icon name="plus" size={12} /> 作品を追加</button>
+                                            </div>
+                                        )}
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">ジャンル</label>
+                                            <select value={formCategory} onChange={(e) => setFormCategory(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none appearance-none">
+                                                {categories.slice(1).map(cat => <option key={cat}>{cat}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">画像URL (任意)</label>
+                                            <input type="text" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} placeholder="https://..." className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">プロの推しポイント</label>
+                                            <textarea rows="3" value={formComment} onChange={(e) => setFormComment(e.target.value)} placeholder="ここを見てほしい！" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm leading-relaxed outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                                        </div>
+                                    </div>
+                                    <button onClick={handleSubmit} className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200">
+                                        <Icon name="send" size={18} /><span>共有する</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
