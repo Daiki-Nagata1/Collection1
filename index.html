@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entertainment Collection</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Core JS -->
+    <script src="https://unpkg.com/lucide@0.475.0/dist/umd/lucide.min.js"></script>
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        window.FirebaseSDK = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, setDoc };
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        .fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+
+        // --- 初期サンプルデータ ---
+        const initialItems = [
+            { id: 'sample-1', title: "ゴジラ-1.0", category: "映画", user: "山本", comment: "絶望からの再起を描く脚本が完璧。VFXの使いどころも非常に勉強になります。", reactions: { fire: 82, heart: 45, light: 12 }, image: "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=800", date: "2024-07-15", isCollection: false, userId: 'demo' },
+            { id: 'sample-2', title: "FFピクセルリマスター 1〜6", category: "ゲーム", user: "加藤", comment: "ドット絵の極致。シリーズの変遷を一度に学べる神パッケージです。", reactions: { fire: 56, heart: 20, light: 45 }, image: "https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=800", date: "2024-07-05", isCollection: true, subItems: [{ title: "FF I", reactions: { fire: 5 } }, { title: "FF VI", reactions: { fire: 32 } }], userId: 'demo' }
+        ];
+
+        /**
+         * Safe Icon Component
+         */
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const containerRef = useRef(null);
+            useEffect(() => {
+                if (window.lucide && containerRef.current) {
+                    containerRef.current.innerHTML = `<i data-lucide="${name}"></i>`;
+                    window.lucide.createIcons({
+                        elements: [containerRef.current.firstChild],
+                        attrs: { class: className, width: size, height: size }
+                    });
+                }
+            }, [name, size, className]);
+            return <span ref={containerRef} className="inline-flex items-center justify-center shrink-0"></span>;
+        };
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [items, setItems] = useState([]);
+            const [isLoading, setIsLoading] = useState(true);
+            const [isSubmitting, setIsSubmitting] = useState(false);
+            const [isOffline, setIsOffline] = useState(false); // オフラインモード判定
+            const [viewMode, setViewMode] = useState('card');
+            const [activeTab, setActiveTab] = useState('すべて');
+            const [sortBy, setSortBy] = useState('newest');
+            const [showModal, setShowModal] = useState(false);
+            const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+            const [searchQuery, setSearchQuery] = useState('');
+            
+            const [postType, setPostType] = useState('single');
+            const [formTitle, setFormTitle] = useState('');
+            const [formCategory, setFormCategory] = useState('映画');
+            const [formComment, setFormComment] = useState('');
+            const [formUrl, setFormUrl] = useState('');
+            const [subItemsInput, setSubItemsInput] = useState(['']);
+            const [editingId, setEditingId] = useState(null);
+
+            const categories = ["すべて", "映画", "漫画", "アニメ", "ドラマ", "ゲーム", "YouTube", "小説", "その他"];
+
+            // Gemini環境の設定取得
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'standalone-demo';
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+
+            useEffect(() => {
+                // Configがない場合はデモモードへ
+                if (!firebaseConfig) {
+                    console.warn("Firebase configuration not found. Switching to local demo mode.");
+                    setIsOffline(true);
+                    setUser({ uid: 'demo-user', displayName: 'ゲストユーザー' });
+                    setItems(initialItems);
+                    setIsLoading(false);
+                    return;
+                }
+
+                // --- Firebase初期化ロジック ---
+                const initFirebase = async () => {
+                    try {
+                        const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, collection, onSnapshot } = window.FirebaseSDK;
+                        const app = initializeApp(firebaseConfig);
+                        const auth = getAuth(app);
+                        const db = getFirestore(app);
+
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+
+                        onAuthStateChanged(auth, (u) => {
+                            setUser(u);
+                            if (u) {
+                                const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'recommendations');
+                                onSnapshot(colRef, (snapshot) => {
+                                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                                    setItems(data.length > 0 ? data : initialItems);
+                                    setIsLoading(false);
+                                }, (err) => {
+                                    console.error(err);
+                                    setIsOffline(true);
+                                    setIsLoading(false);
+                                });
+                            }
+                        });
+                    } catch (e) {
+                        console.error("Firebase Init Error:", e);
+                        setIsOffline(true);
+                        setIsLoading(false);
+                    }
+                };
+                initFirebase();
+            }, []);
+
+            const categoryCounts = useMemo(() => {
+                const counts = { "すべて": items.length };
+                items.forEach(item => { counts[item.category] = (counts[item.category] || 0) + 1; });
+                return counts;
+            }, [items]);
+
+            const handleSubmit = async () => {
+                if (!user || !formTitle || !formComment || isSubmitting) return;
+                setIsSubmitting(true);
+
+                const payload = {
+                    title: formTitle,
+                    category: formCategory,
+                    comment: formComment,
+                    image: formUrl || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=800",
+                    isCollection: postType === 'collection',
+                    subItems: postType === 'collection' ? subItemsInput.filter(s => s.trim()).map(s => ({ title: s, reactions: { fire: 0, light: 0 } })) : [],
+                    updatedAt: new Date().toISOString()
+                };
+
+                if (isOffline) {
+                    // --- デモモード用処理 (メモリ保存) ---
+                    if (editingId) {
+                        setItems(prev => prev.map(i => i.id === editingId ? { ...i, ...payload } : i));
+                    } else {
+                        const newItem = { ...payload, id: Date.now().toString(), userId: user.uid, user: 'You', date: new Date().toISOString().split('T')[0], reactions: { fire: 0, heart: 0, light: 0 } };
+                        setItems(prev => [newItem, ...prev]);
+                    }
+                    setTimeout(() => { setIsSubmitting(false); closeModal(); }, 500);
+                } else {
+                    // --- Firebase保存処理 ---
+                    const { getFirestore, collection, addDoc, doc, updateDoc } = window.FirebaseSDK;
+                    const db = getFirestore();
+                    try {
+                        if (editingId) {
+                            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'recommendations', editingId), payload);
+                        } else {
+                            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'recommendations'), { ...payload, userId: user.uid, user: `Member-${user.uid.slice(0, 4)}`, date: new Date().toISOString().split('T')[0], reactions: { fire: 0, heart: 0, light: 0 } });
+                        }
+                        closeModal();
+                    } catch (e) { console.error(e); alert("保存できませんでした"); } finally { setIsSubmitting(false); }
+                }
+            };
+
+            const executeDelete = async () => {
+                if (!deleteConfirmId) return;
+                if (isOffline) {
+                    setItems(prev => prev.filter(i => i.id !== deleteConfirmId));
+                    setDeleteConfirmId(null);
+                } else {
+                    const { getFirestore, doc, deleteDoc } = window.FirebaseSDK;
+                    try {
+                        await deleteDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'recommendations', deleteConfirmId));
+                        setDeleteConfirmId(null);
+                    } catch (e) { console.error(e); }
+                }
+            };
+
+            const handleReaction = async (itemId, type) => {
+                if (isOffline) {
+                    setItems(prev => prev.map(i => i.id === itemId ? { ...i, reactions: { ...i.reactions, [type]: (i.reactions[type] || 0) + 1 } } : i));
+                } else {
+                    const { getFirestore, doc, updateDoc } = window.FirebaseSDK;
+                    const item = items.find(i => i.id === itemId);
+                    const newReactions = { ...item.reactions };
+                    newReactions[type] = (newReactions[type] || 0) + 1;
+                    await updateDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'recommendations', itemId), { reactions: newReactions });
+                }
+            };
+
+            const handleSubItemReaction = async (itemId, subIdx, type) => {
+                if (isOffline) {
+                    setItems(prev => prev.map(i => {
+                        if (i.id === itemId) {
+                            const newSubs = [...i.subItems];
+                            newSubs[subIdx].reactions[type] = (newSubs[subIdx].reactions[type] || 0) + 1;
+                            return { ...i, subItems: newSubs };
+                        }
+                        return i;
+                    }));
+                } else {
+                    const { getFirestore, doc, updateDoc } = window.FirebaseSDK;
+                    const item = items.find(i => i.id === itemId);
+                    const newSubItems = [...item.subItems];
+                    newSubItems[subIdx].reactions[type] = (newSubItems[subIdx].reactions[type] || 0) + 1;
+                    await updateDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'recommendations', itemId), { subItems: newSubItems });
+                }
+            };
+
+            const startEdit = (item) => {
+                setEditingId(item.id);
+                setPostType(item.isCollection ? 'collection' : 'single');
+                setFormTitle(item.title);
+                setFormCategory(item.category);
+                setFormComment(item.comment);
+                setFormUrl(item.image);
+                setSubItemsInput(item.isCollection ? item.subItems.map(s => s.title) : ['']);
+                setShowModal(true);
+            };
+
+            const closeModal = () => {
+                setShowModal(false);
+                setEditingId(null);
+                setFormTitle('');
+                setFormComment('');
+                setFormUrl('');
+                setSubItemsInput(['']);
+            };
+
+            const filteredAndSortedItems = useMemo(() => {
+                let result = items.filter(item => 
+                    (activeTab === "すべて" || item.category === activeTab) &&
+                    (item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                     item.comment.toLowerCase().includes(searchQuery.toLowerCase()))
+                );
+                if (sortBy === 'newest') result.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+                else if (sortBy === 'popular') result.sort((a, b) => {
+                    const totalA = (a.reactions?.fire || 0) + (a.reactions?.heart || 0) + (a.reactions?.light || 0);
+                    const totalB = (b.reactions?.fire || 0) + (b.reactions?.heart || 0) + (b.reactions?.light || 0);
+                    return totalB - totalA;
+                });
+                return result;
+            }, [items, activeTab, searchQuery, sortBy]);
+
+            return (
+                <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
+                    <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-slate-200 px-4 sm:px-6 py-4">
+                        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-2 shrink-0">
+                                <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-lg flex items-center justify-center">
+                                    <Icon name="layout" size={24} />
+                                </div>
+                                <h1 className="text-xl font-bold tracking-tight hidden sm:block italic text-indigo-900">Entertainment Collection</h1>
+                            </div>
+                            <div className="flex-1 max-w-md relative">
+                                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><Icon name="search" size={18} /></div>
+                                <input type="text" placeholder="検索..." className="w-full pl-10 pr-4 py-2.5 bg-slate-100 rounded-full border-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm outline-none" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                            </div>
+                            <button onClick={() => setShowModal(true)} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 sm:px-6 py-2.5 rounded-full font-bold shadow-lg transform hover:scale-105 transition-all">
+                                <Icon name="plus" size={20} /><span className="hidden sm:inline">共有する</span>
+                            </button>
+                        </div>
+                    </header>
+
+                    {isOffline && (
+                        <div className="bg-amber-50 border-b border-amber-100 text-amber-700 text-[10px] text-center py-1 font-bold">
+                            ⚠️ デモモード中：ブラウザを閉じるとデータはリセットされます（Firebase設定が必要です）
+                        </div>
+                    )}
+
+                    <div className="bg-white border-b border-slate-100 px-4 sm:px-6 py-3 sticky top-[73px] z-20 shadow-sm">
+                        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pr-4">
+                                {categories.map(cat => (
+                                    <button key={cat} onClick={() => setActiveTab(cat)} className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap border transition-all ${activeTab === cat ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'text-slate-500 bg-white border-slate-200 hover:bg-slate-50'}`}>
+                                        <span>{cat}</span>
+                                        <span className={`flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] ${activeTab === cat ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-500'}`}>{categoryCounts[cat] || 0}</span>
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="flex items-center gap-4 self-end md:self-auto">
+                                <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
+                                    <Icon name="arrow-up-down" size={14} className="text-slate-500" />
+                                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="bg-transparent text-xs font-bold text-slate-600 outline-none cursor-pointer">
+                                        <option value="newest">新着順</option>
+                                        <option value="popular">盛り上がり順</option>
+                                    </select>
+                                </div>
+                                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                                    <button onClick={() => setViewMode('card')} className={`p-2 rounded-lg ${viewMode === 'card' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}><Icon name="layout-grid" size={18} /></button>
+                                    <button onClick={() => setViewMode('list')} className={`p-2 rounded-lg ${viewMode === 'list' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}><Icon name="list" size={18} /></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+                        {isLoading ? (
+                            <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                                <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+                                <p className="mt-4 font-medium">読み込み中...</p>
+                            </div>
+                        ) : (
+                            <div className={viewMode === 'card' ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8" : "flex flex-col gap-3"}>
+                                {filteredAndSortedItems.map(item => (
+                                    <div key={item.id} className={`group relative bg-white border transition-all fade-in ${viewMode === 'card' ? 'rounded-3xl flex flex-col h-full border-slate-200 shadow-sm hover:shadow-xl' : 'rounded-2xl p-4 flex flex-col gap-4 border-slate-200 shadow-sm'} ${item.isCollection ? 'border-indigo-200' : ''}`}>
+                                        {viewMode === 'card' && (
+                                            <div className="relative h-44 bg-slate-200 overflow-hidden rounded-t-3xl shrink-0">
+                                                <img src={item.image} className="w-full h-full object-cover group-hover:scale-105 transition-all duration-500" onError={(e) => e.target.src="https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=800"} />
+                                                <div className="absolute top-4 left-4 flex gap-2">
+                                                    <span className="bg-white/90 backdrop-blur px-3 py-1 rounded-full text-[10px] font-bold text-indigo-700 uppercase">{item.category}</span>
+                                                    {item.isCollection && <span className="bg-indigo-600 px-3 py-1 rounded-full text-[10px] font-bold text-white flex items-center gap-1 shadow-md"><Icon name="layers" size={10} />COLLECTION</span>}
+                                                </div>
+                                                {user && (item.userId === user.uid || isOffline) && (
+                                                    <div className="absolute top-4 right-4 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <button onClick={() => startEdit(item)} className="bg-white/90 p-2 rounded-full text-indigo-600 shadow-sm hover:bg-white flex items-center justify-center w-8 h-8"><Icon name="pencil" size={14} /></button>
+                                                        <button onClick={() => setDeleteConfirmId(item.id)} className="bg-white/90 p-2 rounded-full text-red-600 shadow-sm hover:bg-white flex items-center justify-center w-8 h-8"><Icon name="trash-2" size={14} /></button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                        <div className={viewMode === 'card' ? 'p-6 flex flex-col flex-1' : 'flex flex-col w-full'}>
+                                            <div className={viewMode === 'list' ? 'flex items-center gap-4' : ''}>
+                                                {viewMode === 'list' && (
+                                                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden shrink-0 relative border border-slate-100">
+                                                        <img src={item.image} className="w-full h-full object-cover" />
+                                                        {item.isCollection && <div className="absolute bottom-0 right-0 bg-indigo-600 text-white p-1 rounded-tl-lg flex items-center justify-center"><Icon name="layers" size={10} /></div>}
+                                                    </div>
+                                                )}
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center justify-between">
+                                                        {viewMode === 'list' && (
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md uppercase bg-indigo-50 text-indigo-600">{item.category}</span>
+                                                                <span className="text-[10px] font-medium text-slate-400">by {item.user} • {item.date}</span>
+                                                            </div>
+                                                        )}
+                                                        {viewMode === 'list' && user && (item.userId === user.uid || isOffline) && (
+                                                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <button onClick={() => startEdit(item)} className="text-slate-400 hover:text-indigo-600 flex items-center"><Icon name="pencil" size={14} /></button>
+                                                                <button onClick={() => setDeleteConfirmId(item.id)} className="text-slate-400 hover:text-red-600 flex items-center"><Icon name="trash-2" size={14} /></button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <h3 className="text-lg font-bold group-hover:text-indigo-600 transition-colors truncate">{item.title}</h3>
+                                                    <div className="mt-2">
+                                                        <p className={`text-slate-600 text-sm bg-slate-50 p-3 rounded-2xl italic leading-relaxed border border-slate-100 ${viewMode === 'card' ? 'line-clamp-3 min-h-[5.5rem]' : 'line-clamp-1'}`}>"{item.comment}"</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            {item.isCollection && (
+                                                <div className={`mt-4 space-y-1.5 ${viewMode === 'list' ? 'sm:pl-[84px]' : 'flex-1'}`}>
+                                                    <div className="flex flex-wrap gap-2 mt-2">
+                                                        {(item.subItems || []).map((sub, idx) => (
+                                                            <button key={idx} onClick={() => handleSubItemReaction(item.id, idx, item.category === 'YouTube' ? 'lightbulb' : 'flame')} className="flex items-center gap-2 bg-white border border-slate-100 hover:border-indigo-300 rounded-xl px-3 py-1.5 transition-all text-xs text-slate-700 shadow-sm active:scale-95">
+                                                                <span className="font-medium">{sub.title}</span>
+                                                                <div className="flex items-center gap-1 font-bold text-indigo-500">
+                                                                    <Icon name={item.category === 'YouTube' ? 'lightbulb' : 'flame'} size={12} />
+                                                                    <span>{sub.reactions?.fire || sub.reactions?.light || 0}</span>
+                                                                </div>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                            <div className={`mt-auto pt-4 border-t border-slate-100 flex items-center justify-between ${viewMode === 'list' ? 'hidden' : ''}`}>
+                                                <span className="text-[10px] font-bold text-slate-500 uppercase">{item.user}</span>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => handleReaction(item.id, 'fire')} className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-50 hover:bg-orange-50 text-slate-400 hover:text-orange-500 transition-all border border-transparent active:scale-95"><Icon name="flame" size={14} /><span className="text-xs font-bold">{item.reactions?.fire || 0}</span></button>
+                                                    <button onClick={() => handleReaction(item.id, 'heart')} className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-500 transition-all border border-transparent active:scale-95"><Icon name="heart" size={14} /><span className="text-xs font-bold">{item.reactions?.heart || 0}</span></button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Modal */}
+                    {showModal && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
+                            <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden my-auto animate-in zoom-in-95 duration-200">
+                                <div className="flex justify-between items-center px-6 py-5 border-b border-slate-100">
+                                    <h2 className="text-xl font-bold">{editingId ? '内容を修正' : '「推し」を共有'}</h2>
+                                    <button onClick={closeModal} className="text-slate-400 hover:text-slate-600 bg-slate-100 p-2 rounded-full transition-colors"><Icon name="x" size={20} /></button>
+                                </div>
+                                <div className="p-6 space-y-5">
+                                    <div className="flex p-1 bg-slate-100 rounded-xl">
+                                        <button onClick={() => setPostType('single')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${postType === 'single' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>単体作品</button>
+                                        <button onClick={() => setPostType('collection')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${postType === 'collection' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500'}`}>シリーズ・まとめ</button>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">タイトル *</label><input type="text" value={formTitle} onChange={(e) => setFormTitle(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all" /></div>
+                                        {postType === 'collection' && (
+                                            <div className="space-y-2">
+                                                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">含まれる作品</label>
+                                                {subItemsInput.map((val, idx) => (
+                                                    <input key={idx} type="text" value={val} onChange={(e) => { const n = [...subItemsInput]; n[idx] = e.target.value; setSubItemsInput(n); }} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm mb-1 outline-none" />
+                                                ))}
+                                                <button onClick={() => setSubItemsInput([...subItemsInput, ''])} className="text-[10px] font-bold text-indigo-600 flex items-center gap-1 hover:underline"><Icon name="plus" size={12} /> 作品を追加</button>
+                                            </div>
+                                        )}
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">ジャンル</label><select value={formCategory} onChange={(e) => setFormCategory(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none appearance-none cursor-pointer">{categories.slice(1).map(cat => <option key={cat}>{cat}</option>)}</select></div>
+                                            <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">画像URL</label><input type="text" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} placeholder="https://..." className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none" /></div>
+                                        </div>
+                                        <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">推しポイント *</label><textarea rows="3" value={formComment} onChange={(e) => setFormComment(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"></textarea></div>
+                                    </div>
+                                    <button onClick={handleSubmit} disabled={isSubmitting || !formTitle || !formComment} className={`w-full flex items-center justify-center gap-2 py-4 rounded-xl font-bold transition-all shadow-lg ${isSubmitting || !formTitle || !formComment ? 'bg-slate-300' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}>
+                                        {isSubmitting ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <Icon name="send" size={18} />}
+                                        <span>{isSubmitting ? '保存中...' : (editingId ? '更新する' : '共有する')}</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Delete Confirm Modal */}
+                    {deleteConfirmId && (
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4">
+                            <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-8 text-center animate-in zoom-in-95 duration-200">
+                                <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="trash-2" size={32} /></div>
+                                <h3 className="text-xl font-bold mb-2">投稿を削除しますか？</h3>
+                                <div className="grid grid-cols-2 gap-3 mt-8">
+                                    <button onClick={() => setDeleteConfirmId(null)} className="py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-colors">キャンセル</button>
+                                    <button onClick={executeDelete} className="py-3 rounded-xl font-bold bg-red-600 text-white hover:bg-red-700 shadow-lg transition-all">削除する</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
